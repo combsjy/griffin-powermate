@@ -3,4 +3,5 @@ __author__  = 'Christian Musa <christianmusa@gmail.com>'
 __url__     = 'https://github.com/crash7/griffin-powermate'
 __all__     = []
 
-from griffin_powermate import *
+from .griffin_powermate import *
+from .send_input import PressKey, ReleaseKey, KeyConstants
