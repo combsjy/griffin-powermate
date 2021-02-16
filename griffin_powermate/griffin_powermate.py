@@ -1,11 +1,12 @@
 from pywinusb.hid import HidDeviceFilter
+from ctypes import *
 
 
 def find_griffin_powermate():
     return GriffinPowermate.find_all()
 
 
-class GriffinPowermate():
+class GriffinPowermate(object):
     VENDOR = 0x077d
     PRODUCT = 0x0410
     MOVE_LEFT = -1
@@ -15,11 +16,54 @@ class GriffinPowermate():
         self.__device = raw_device
         self.__device.set_raw_data_handler(
             lambda raw_data: self.__internal_listener(raw_data))
-        self.__events = {}
+        self.__is_button_down = False
+
+        # events:
+        #  on_up
+        #  on_down
+        #  on_pressed
+        #  on_released
+        #  on_up_while_pressed
+        #  on_down_while_down
+
+    @property
+    def is_button_down(self):
+        return self.__is_button_down
+
+    def __on_up(self, offset):
+        self.on_up(offset)
+
+    def on_up(self, offset):
+        print('Moved up {}'.format(offset))
+
+    def __on_down(self, offset):
+        self.on_down(offset)
+
+    def on_down(self, offset):
+        print('Moved down {}'.format(offset))
+
+    def __on_pressed(self):
+        self.__is_button_down = True
+        self.on_pressed()
+
+    def on_pressed(self):
+        print('Button pressed')
+
+    def __on_released(self):
+        self.__is_button_down = False
+        self.on_released()
+
+    def on_released(self):
+        print('Button released')
+
+    def __on_up_while_pressed(self, offset):
+        self.__on_up(offset)
+
+    def __on_down_while_pressed(self, offset):
+        self.__on_down(offset)
 
     @classmethod
     def find_all(cls):
-        # FixMe
         return [cls(device) for device in
                 HidDeviceFilter(vendor_id=cls.VENDOR,
                                 product_id=cls.PRODUCT).get_devices()]
@@ -28,11 +72,27 @@ class GriffinPowermate():
         """
         [0, button_status, move, 0, bright, pulse_status, pulse_value]
         """
-        move = 1 if raw_data[2] < 128 else -1
-        if 'move' in self.__events:
-            self.__events['move'](move, raw_data[1])
-        if 'raw' in self.__events:
-            self.__events['raw'](raw_data)
+        direction_delta = c_int8(raw_data[2]).value
+        button_state = raw_data[1]
+
+        if direction_delta > 0:
+            if self.is_button_down:
+                self.__on_up_while_pressed(direction_delta)
+            else:
+                self.__on_up(direction_delta)
+        elif direction_delta < 0:
+            direction_delta *= -1
+            if self.is_button_down:
+                self.__on_down_while_pressed(direction_delta)
+            else:
+                self.__on_down(direction_delta)
+        else:
+            if self.__is_button_down and button_state == 0:
+                self.__on_released()
+            elif not self.__is_button_down and button_state == 1:
+                self.__on_pressed()
+            else:
+                raise Exception('invalid condition')
 
     def is_plugged(self):
         return self.__device.is_plugged()
@@ -44,9 +104,6 @@ class GriffinPowermate():
     def close(self):
         if self.__device.is_opened():
             self.__device.close()
-
-    def on_event(self, event, callback):
-        self.__events[event] = callback
 
     def set_brightness(self, bright):
         # alternative: device.send_output_report([0, bright])
@@ -61,42 +118,3 @@ class GriffinPowermate():
     def set_led_pulsing_default(self):
         self.__device.send_feature_report(
             [0, 0x41, 0x01, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00])
-
-
-if __name__ == '__main__':
-    from time import sleep
-    from msvcrt import kbhit
-
-    def move_listener(direction, button):
-        print("Moved: {0} - {1}"
-              .format('LEFT' if direction == GriffinPowermate.MOVE_LEFT
-                      else 'RIGHT', button))
-
-    def raw_listener(data):
-        print "Moved: {0}".format(data)
-
-    devices = GriffinPowermate.find_all()
-    if len(devices) > 0:
-        print "Found Powermates"
-        powermate = devices[0]
-
-        try:
-            powermate.open()
-
-            powermate.set_brightness(200)
-
-            powermate.set_led_pulsing_status(True)
-            powermate.set_led_pulsing_default()
-
-            powermate.on_event('move', move_listener)
-            powermate.on_event('raw', raw_listener)
-
-            print("\nWaiting for data..."
-                  "\nPress any (system keyboard) key to stop...")
-            while not kbhit() and powermate.is_plugged():
-                # keep the device opened to receive events
-                sleep(0.5)
-        finally:
-            powermate.set_led_pulsing_status(False)
-            powermate.set_brightness(0)
-            powermate.close()
